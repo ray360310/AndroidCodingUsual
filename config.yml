@@ -1,0 +1,62 @@
+# Java Gradle CircleCI 2.0 configuration file
+#
+# Check https://circleci.com/docs/2.0/language-java/ for more details
+#
+version: 2
+jobs:
+  build:
+    working_directory: ~/code
+    docker:
+      - image: circleci/android:api-27-alpha
+    environment:
+      JVM_OPTS: "-Xms512m -Xmx1024m"
+      GRADLE_OPTS: '-Dorg.gradle.jvmargs="-Xmx1536m -XX:+HeapDumpOnOutOfMemoryError"'
+    steps:
+      - checkout
+      - restore_cache:
+            key: jars-{{ checksum "build.gradle" }}-{{ checksum  "app/build.gradle" }}
+      - run:
+            name: Download Dependencies
+            command: ./gradlew androidDependencies
+      - save_cache:
+          paths:
+            - ~/.gradle
+          key: jars-{{ checksum "build.gradle" }}-{{ checksum  "app/build.gradle" }}
+      - store_test_results:
+          path: app/build/test-results
+          destination: test-results/
+      - store_artifacts:
+          path: app/build/reports
+          destination: reports
+# push debug version apk to fabric for testing
+      - deploy:
+          name: "Deploy to Fabric"
+          command: |
+            if [ "${CIRCLE_BRANCH}" == "develop" ]; then
+              ./gradlew assembleDebug crashlyticsUploadDistributionDebug --stacktrace
+            fi
+# push releasr version apk to Google Play
+      - deploy:
+          name: "Deploy to Google Play"
+          command: |
+            if [ "${CIRCLE_BRANCH}" == "master"" ]; then
+              ./gradlew publishApkRelease --stacktrace
+            fi
+# notification to stride
+      - run:
+          name: Notify To Stride When Test Success
+          when: on_success
+          command: |
+            curl -X POST \-H 'Content-Type: application/json' \
+            -H 'Authorization: Bearer '"${STRIDE_TOKEN}"'' \
+            -d '{"body":{"version":1,"type":"doc","content":[{"type":"applicationCard","attrs": {"text": "test message","collapsible":true,"title":{"text":"Circle CI Report","user":{"icon":{"url":"https://a.slack-edge.com/7f1a0/plugins/circleci/assets/service_512.png","label":"Circle CI"}}},"description":{"text":"'"${CIRCLE_USERNAME}"' built '"${CIRCLE_PROJECT_REPONAME}"' '"${CIRCLE_BRANCH}"'"},"details":[{"lozenge": {"text": "Build Success","appearance": "success"}}],"link":{"url":"'"${CIRCLE_BUILD_URL}"'"}}}]}}' \
+            --url "${STRIDE_URL}"
+      - run:
+          name: Notify To Stride When Test Fail
+          when: on_fail
+          command: |
+            curl -X POST \
+            -H 'Content-Type: application/json' \
+            -H 'Authorization: Bearer '"${STRIDE_TOKEN}"'' \
+            -d '{"body":{"version":1,"type":"doc","content":[{"type":"applicationCard","attrs": {"text": "test message","collapsible":true,"title":{"text":"Circle CI Report","user":{"icon":{"url":"https://a.slack-edge.com/7f1a0/plugins/circleci/assets/service_512.png","label":"Circle CI"}}},"description":{"text":"'"${CIRCLE_USERNAME}"' built '"${CIRCLE_PROJECT_REPONAME}"' '"${CIRCLE_BRANCH}"'"},"details":[{"lozenge": {"text": "Build Failed","appearance": "removed"}}],"link":{"url":"'"${CIRCLE_BUILD_URL}"'"}}}]}}' \
+            --url "${STRIDE_URL}"
